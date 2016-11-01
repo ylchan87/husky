@@ -53,6 +53,12 @@ target_link_libraries(PI ${husky})
 target_link_libraries(PI ${EXTERNAL_LIB})
 set_property(TARGET PI PROPERTY CXX_STANDARD 14)
 
+# VRPCA
+add_executable(VRPCA vrpca.cpp)
+target_link_libraries(VRPCA ${husky})
+target_link_libraries(VRPCA ${EXTERNAL_LIB})
+set_property(TARGET VRPCA PROPERTY CXX_STANDARD 14)
+
 # CC
 add_executable(CC connected_components.cpp)
 target_link_libraries(CC ${husky})
