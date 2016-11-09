@@ -123,3 +123,9 @@ add_executable(TF-IDF tfidf.cpp)
 target_link_libraries(TF-IDF ${husky})
 target_link_libraries(TF-IDF ${EXTERNAL_LIB})
 set_property(TARGET Aggregator PROPERTY CXX_STANDARD 14)
+
+# Affinity matrix
+add_executable(AMAT affinity.cpp)
+target_link_libraries(AMAT ${husky})
+target_link_libraries(AMAT ${EXTERNAL_LIB})
+set_property(TARGET AMAT PROPERTY CXX_STANDARD 14)
