@@ -95,6 +95,14 @@ target_link_libraries(LogisticRegression ${husky})
 target_link_libraries(LogisticRegression ${EXTERNAL_LIB})
 set_property(TARGET LogisticRegression PROPERTY CXX_STANDARD 14)
 
+# sPCASVD
+set(EIGEN_INCLUDE "${PROJECT_BINARY_DIR}/include/eigen3")
+include_directories(${EIGEN_INCLUDE})
+add_executable(sPCASVD sPCASVD.cpp serialization_eigen.cpp)
+target_link_libraries(sPCASVD ${husky})
+target_link_libraries(sPCASVD ${EXTERNAL_LIB})
+set_property(TARGET sPCASVD PROPERTY CXX_STANDARD 14)
+
 # SVM
 add_executable(SVM svm.cpp)
 target_link_libraries(SVM ${husky})
