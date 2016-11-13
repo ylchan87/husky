@@ -211,12 +211,24 @@ void affinity() {
 }
 
 int main(int argc, char** argv) {
+    // Input:
+    // A txt with the each line as
+    // pointID dim1Value dim2Value dim3Value ...
+    // eg.
+    // 0 -2.4903068672 3.13023508816
+    // 1 -0.788251940489 6.95547689798
+    // 2 -1.11412555846 6.91076871556
+    // ...
+    //
+    // Output:
+    // A txt with each line containing 1 row of the affinity matrix as
+    // rowID rowElem1 rowElem2 rowElem3 ...rowElemN
     std::vector<std::string> args;
     args.push_back("hdfs_namenode");
     args.push_back("hdfs_namenode_port");
-    args.push_back("input");
-    args.push_back("outDir");
-    args.push_back("dimension");
+    args.push_back("input");     // path to input file eg. hdfs:///user/ylchan/testPICdata.txt
+    args.push_back("outDir");    // output dir in hdfs eg. /user/ylchan/AffMat_T2/
+    args.push_back("dimension"); // number of dimensions for the input data
     if (husky::init_with_args(argc, argv, args)) {
         husky::run_job(affinity);
         return 0;

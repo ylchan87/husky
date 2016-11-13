@@ -187,14 +187,27 @@ void pic() {
 }
 
 int main(int argc, char** argv) {
+    // Input:
+    // The affinity matrix output by affinity.cpp i.e.
+    // A txt with each line containing 1 row of the affinity matrix as
+    // rowID rowElem1 rowElem2 rowElem3 ...rowElemN
+    //
+    // Output:
+    // A txt with the each line as
+    // pointID classificationVal
+    // eg.
+    // 0 0.001
+    // 1 0.0009
+    // 2 0.0009
+    // ...
     std::vector<std::string> args;
     args.push_back("hdfs_namenode");
     args.push_back("hdfs_namenode_port");
-    args.push_back("input");
-    args.push_back("outDir");
-    args.push_back("maxIter");      // <=0 implies 10
-    args.push_back("stopThres");    // <=0 implies auto
-    args.push_back("outPerNIter");  // <=0 implies turn off
+    args.push_back("input");        // path to input file eg. hdfs:///user/ylchan/AffMat_T2/merge
+    args.push_back("outDir");       // output dir in hdfs eg. /user/ylchan/testPIC/
+    args.push_back("maxIter");      // max no. of power iteration to do (setting <=0 implies 10)
+    args.push_back("stopThres");    // stopping threshold (setting <=0 implies auto)
+    args.push_back("outPerNIter");  // saving intermediate result every N iteration (<=0 implies turn off)
     if (husky::init_with_args(argc, argv, args)) {
         husky::run_job(pic);
         return 0;
