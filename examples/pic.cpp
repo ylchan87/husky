@@ -205,8 +205,8 @@ int main(int argc, char** argv) {
     args.push_back("hdfs_namenode_port");
     args.push_back("input");        // path to input file eg. hdfs:///user/ylchan/AffMat_T2/merge
     args.push_back("outDir");       // output dir in hdfs eg. /user/ylchan/testPIC/
-    args.push_back("maxIter");      // max no. of power iteration to do (setting <=0 implies 10)
-    args.push_back("stopThres");    // stopping threshold (setting <=0 implies auto)
+    args.push_back("maxIter");      // max no. of power iteration to do (setting <0 implies 10)
+    args.push_back("stopThres");    // stopping threshold (setting <0 implies auto)
     args.push_back("outPerNIter");  // saving intermediate result every N iteration (<=0 implies turn off)
     if (husky::init_with_args(argc, argv, args)) {
         husky::run_job(pic);
