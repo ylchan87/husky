@@ -44,11 +44,11 @@ class Node {
 
     // Serialization and deserialization
     friend husky::BinStream& operator<<(husky::BinStream& stream, Node u) {
-        stream << u.pos << u.edgeW << u.val << u.valp << u.valpp << u.valtmp;
+        stream << u.pos << u.edgeW << u.edgeWsum << u.val << u.valp << u.valpp << u.valtmp;
         return stream;
     }
     friend husky::BinStream& operator>>(husky::BinStream& stream, Node& u) {
-        stream >> u.pos >> u.edgeW >> u.val >> u.valp >> u.valpp >> u.valtmp;
+        stream >> u.pos >> u.edgeW >> u.edgeWsum >> u.val >> u.valp >> u.valpp >> u.valtmp;
         return stream;
     }
 
@@ -96,6 +96,7 @@ void pic() {
             edgeW.push_back(tmp);
             edgeWsum += tmp;
         }
+        edgeW[id] = 0.0;
         edgeW.shrink_to_fit();
 
         dataCountAgg.update(1);
@@ -138,10 +139,7 @@ void pic() {
     for (uint iter = 0; iter < maxIter; ++iter) {
         list_execute(node_list, [&](Node& n) {
             // here we assuemed the edge is bidirectional with same weight (a.k.a Affinity mat is symmetric)
-            for (uint i = 0; i < n.id(); ++i) {
-                nodeTonodeCh.push(n.edgeW[i] * n.val, i);
-            }
-            for (uint i = n.id() + 1; i < totDataPoints; ++i) {
+            for (uint i = 0; i < totDataPoints; ++i) {
                 nodeTonodeCh.push(n.edgeW[i] * n.val, i);
             }
         });

@@ -84,6 +84,10 @@ class MatRow {
 
     MatRow() {}
     explicit MatRow(const KeyT& p) : pos(p) {}
+    MatRow(const KeyT& pId, ndvec elems) {
+        this->pos = pId;
+        this->elems = std::move(elems);
+    }
     virtual const KeyT& id() const { return pos; }
 
     // Serialization and deserialization
@@ -97,6 +101,7 @@ class MatRow {
     }
 
     KeyT pos;
+    ndvec elems;
 };
 
 void affinity() {
@@ -138,7 +143,12 @@ void affinity() {
     };
     load(infmt, {&ac}, parse_ndpoint);
     globalize(ndpoint_list);
-    husky::base::log_msg("No. of rows in input " + std::to_string(dataCountAgg.get_value()));
+    int totPts = dataCountAgg.get_value();
+    husky::base::log_msg("No. of rows in input " + std::to_string(totPts));
+    husky::base::log_msg("No. of rows in local " + std::to_string(ndpoint_list.get_size()));
+
+    auto& allPtsCh = husky::ChannelFactory::create_broadcast_channel<int, NDpoint>(ndpoint_list);
+    list_execute(ndpoint_list, [&](NDpoint& p) { allPtsCh.broadcast(p.id(), p); });
 
     // 2. calculate the variance used in similarity function
     size_t totDataPoints = dataCountAgg.get_value();
@@ -151,58 +161,31 @@ void affinity() {
     }
 
     // 3. calculate the affinity matrix
-    husky::ObjList<MatElem> affMatElem_list;
-    globalize(affMatElem_list);
-    auto& pairCh = husky::ChannelFactory::create_push_channel<NDpoint>(ndpoint_list, affMatElem_list);
-
-    // push 2 data points to each matrix element above the diagonal
+    // Since affinity matrix is symmetric, we have A(i,j) = A(j,i)
+    // However we duplicate the calculation here
+    // Calculating the same value twice is still faster then cal once then communicate to other node (for 10D data)
+    auto& affMatRow_list = husky::ObjListFactory::create_objlist<MatRow>();
     list_execute(ndpoint_list, [&](NDpoint& p) {
-        // the pid-th col
-        for (uint i = 0; i < p.id(); ++i) {
-            pairCh.push(p, i * totDataPoints + p.id());
+        ndvec elems(totPts, 0.);
+        for (uint i = 0; i < totPts; i++) {
+            if (i == p.id())
+                continue;
+            auto& p2 = allPtsCh.get(i);  // we assume the datapoints ID start from 0 to N with no gaps
+            float nSigmaSq = 0;
+            for (uint j = 0; j < dimension; ++j) {
+                nSigmaSq += pow(p.coords[j] - p2.coords[j], 2) / (2. * dataVar[j]);
+            }
+            elems[i] = exp(-nSigmaSq);
         }
-        // the pid-th row
-        for (uint i = p.id() + 1; i < totDataPoints; ++i) {
-            pairCh.push(p, p.id() * totDataPoints + i);
-        }
-    });
-
-    husky::base::log_msg("affMat size " + std::to_string(affMatElem_list.get_size()));
-
-    husky::ObjList<MatRow> affMatRow_list;
-    auto& elemToRowCh = husky::ChannelFactory::create_push_channel<MatElem>(affMatElem_list, affMatRow_list);
-
-    // group matrix elements to rows
-    list_execute(affMatElem_list, [&](MatElem& e) {
-        auto pts = pairCh.get(e);
-        float nSigmaSq = 0;
-        for (uint i = 0; i < dimension; i++) {
-            nSigmaSq += pow(pts[0].coords[i] - pts[1].coords[i], 2) / (2. * dataVar[i]);
-        }
-        e.val = exp(-nSigmaSq);
-        int col = e.id() % totDataPoints;
-        int row = e.id() / totDataPoints;
-        // As affinity matrix is symmetric, each matrix element above the diagonal "belongs" to 2 rows
-        elemToRowCh.push(e, col);
-        elemToRowCh.push(e, row);
+        affMatRow_list.add_object(MatRow(p.id(), elems));
     });
 
     // 4. print output
     list_execute(affMatRow_list, [&](MatRow& r) {
-        auto elems = elemToRowCh.get(r);
-        std::vector<float> rowVec(totDataPoints);
-        for (auto aElem : elems) {
-            int elemCol = aElem.id() % totDataPoints;
-            int elemRow = aElem.id() / totDataPoints;
-            if (elemCol > r.id())
-                rowVec[elemCol] = aElem.val;
-            else
-                rowVec[elemRow] = aElem.val;
-        }
         std::string log;
         log = std::to_string(r.id());
-        for (auto aElem : rowVec) {
-            log += "  " + std::to_string(aElem);
+        for (int i = 0; i < totPts; ++i) {
+            log += "  " + std::to_string(r.elems[i]);
         }
         log += "\n";
         husky::io::HDFS::Write("master", "9000", log, husky::Context::get_param("outDir"),
@@ -226,9 +209,9 @@ int main(int argc, char** argv) {
     std::vector<std::string> args;
     args.push_back("hdfs_namenode");
     args.push_back("hdfs_namenode_port");
-    args.push_back("input");     // path to input file eg. hdfs:///user/ylchan/testPICdata.txt
-    args.push_back("outDir");    // output dir in hdfs eg. /user/ylchan/AffMat_T2/
-    args.push_back("dimension"); // number of dimensions for the input data
+    args.push_back("input");      // path to input file eg. hdfs:///user/ylchan/testPICdata.txt
+    args.push_back("outDir");     // output dir in hdfs eg. /user/ylchan/AffMat_T2/
+    args.push_back("dimension");  // number of dimensions for the input data
     if (husky::init_with_args(argc, argv, args)) {
         husky::run_job(affinity);
         return 0;
