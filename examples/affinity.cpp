@@ -54,56 +54,6 @@ class NDpoint {
     ndvec coords;
 };
 
-class MatElem {
-    // Matrix elemet for the affinity matrix
-   public:
-    using KeyT = uint;
-
-    MatElem() {}
-    explicit MatElem(const KeyT& p) : pos(p) {}
-    virtual const KeyT& id() const { return pos; }
-
-    // Serialization and deserialization
-    friend husky::BinStream& operator<<(husky::BinStream& stream, MatElem u) {
-        stream << u.pos << u.val;
-        return stream;
-    }
-    friend husky::BinStream& operator>>(husky::BinStream& stream, MatElem& u) {
-        stream >> u.pos >> u.val;
-        return stream;
-    }
-
-    KeyT pos;
-    float val;
-};
-
-class MatRow {
-    // Dummy obj to collect Matrix elemet for the affinity matrix
-   public:
-    using KeyT = uint;
-
-    MatRow() {}
-    explicit MatRow(const KeyT& p) : pos(p) {}
-    MatRow(const KeyT& pId, ndvec elems) {
-        this->pos = pId;
-        this->elems = std::move(elems);
-    }
-    virtual const KeyT& id() const { return pos; }
-
-    // Serialization and deserialization
-    friend husky::BinStream& operator<<(husky::BinStream& stream, MatRow u) {
-        stream << u.pos;
-        return stream;
-    }
-    friend husky::BinStream& operator>>(husky::BinStream& stream, MatRow& u) {
-        stream >> u.pos;
-        return stream;
-    }
-
-    KeyT pos;
-    ndvec elems;
-};
-
 void affinity() {
     husky::io::LineInputFormat infmt;
     infmt.set_input(husky::Context::get_param("input"));
@@ -157,14 +107,12 @@ void affinity() {
     // Var(x) = <x^2> - <x><x>
     for (int i = 0; i < dimension; ++i) {
         dataVar[i] -= dataMean[i] * dataMean[i];
-        husky::base::log_msg("var " + std::to_string(i) + " " + std::to_string(dataVar[i]));
     }
 
     // 3. calculate the affinity matrix
     // Since affinity matrix is symmetric, we have A(i,j) = A(j,i)
     // However we duplicate the calculation here
     // Calculating the same value twice is still faster then cal once then communicate to other node (for 10D data)
-    auto& affMatRow_list = husky::ObjListFactory::create_objlist<MatRow>();
     list_execute(ndpoint_list, [&](NDpoint& p) {
         ndvec elems(totPts, 0.);
         for (uint i = 0; i < totPts; i++) {
@@ -177,15 +125,12 @@ void affinity() {
             }
             elems[i] = exp(-nSigmaSq);
         }
-        affMatRow_list.add_object(MatRow(p.id(), elems));
-    });
 
-    // 4. print output
-    list_execute(affMatRow_list, [&](MatRow& r) {
+        // output to file
         std::string log;
-        log = std::to_string(r.id());
+        log = std::to_string(p.id());
         for (int i = 0; i < totPts; ++i) {
-            log += "  " + std::to_string(r.elems[i]);
+            log += "  " + std::to_string(elems[i]);
         }
         log += "\n";
         husky::io::HDFS::Write("master", "9000", log, husky::Context::get_param("outDir"),
