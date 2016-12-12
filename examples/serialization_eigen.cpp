@@ -22,7 +22,7 @@ namespace husky {
 namespace base {
 
 typedef Eigen::SparseMatrix<double> SpMat;
-typedef Eigen::SparseVector<double> SpVecT;
+typedef Eigen::SparseVector<double, Eigen::RowMajor> SpVecT;
 
 BinStream & operator >> (BinStream & in, SpMat & mat) {
     size_t innerSize, outerSize, rows, cols, nonZeros;

@@ -42,27 +42,23 @@ public:
     using KeyT = int;
 
     KeyT name;
-    std::vector<std::pair<int, double>> temp_row;
-    SpMat row;
+    Eigen::SparseVector<double,Eigen::RowMajor> row;
 
     SparseRowObject(){}
-    explicit SparseRowObject(const KeyT& s) : name(s) {}    
+    explicit SparseRowObject(const KeyT& s) : name(s), row(INT_MAX) {}    
     virtual const KeyT & id() const { return name; }
 
     friend husky::BinStream & operator >> (husky::BinStream & stream, SparseRowObject & r) {
-        stream >> r.name >> r.temp_row >> r.row;
+        stream >> r.name >> r.row;
         return stream;
     }
     friend husky::BinStream & operator << (husky::BinStream & stream, SparseRowObject & r) {
-        stream << r.name << r.temp_row << r.row;
+        stream << r.name << r.row;
         return stream;
     }
 
     void key_init(KeyT name) {
         this->name = name;
-    }
-    void row_init(SpMat x) {
-        row = x;
     }
 };
 
@@ -92,6 +88,7 @@ void sPCASVD() {
         auto it = tok.begin();
         int id = stoi(*it++);
         SparseRowObject r(id);
+        //std::vector<Eigen::Triplet<double>> tripletList;
         while (it != tok.end()) {
             boost::char_separator<char> sep2(":");
             boost::tokenizer<boost::char_separator<char>> tok2(*it, sep2);
@@ -101,9 +98,11 @@ void sPCASVD() {
             double fea_val = std::stod(*it2++);
             ss1Agg.update(fea_val*fea_val);
             feaSumAgg.update( fabs(fea_val) );
-            r.temp_row.push_back(std::make_pair(fea_index, fea_val));
+            //tripletList.push_back(Eigen::Triplet<double>(1,fea_index,fea_val));
+            r.row.coeffRef(fea_index) = fea_val;
             it++;
         }
+        //r.row.setFromTriplets(tripletList.begin(), tripletList.end());
         row_list.add_object(std::move(r));
         totRowAgg.update(1);
     };
@@ -117,17 +116,13 @@ void sPCASVD() {
     husky::base::log_msg("No. of row " + std::to_string(N) );
     husky::base::log_msg("Dim of features " + std::to_string(D) );
     list_execute(row_list, [&](SparseRowObject & r) {
-        SpMat sparse_row(1, D);
-        sparse_row.reserve( r.temp_row.size());
-        for (auto&  it : r.temp_row) {
-            sparse_row.insert(0, it.first) = it.second;
-        }
-        r.row = std::move(sparse_row);
-        r.temp_row.clear();
-        r.temp_row.shrink_to_fit();
+        r.row.conservativeResize(D);
+        r.row.data().squeeze();
     });
 
-    husky::globalize(row_list);
+    //husky::base::log_msg("P1 ");
+    //husky::globalize(row_list);
+    //husky::base::log_msg("P2 ");
 
     // initialize ss
     double ss = normDice();
@@ -139,6 +134,8 @@ void sPCASVD() {
         C(i,j) = normDice();
     }}
 
+    Mat OldC = C;
+
     //ss1
     double ss1 = ss1Agg.get_value();
 
@@ -147,7 +144,7 @@ void sPCASVD() {
     Mat zero_Dd = Eigen::MatrixXd::Zero(D, d);
     husky::lib::Aggregator<Mat> XtX_agg(zero_dd, [](Mat & a, const Mat & b) { a += b; }, [&](Mat & a) { a = zero_dd; });
     husky::lib::Aggregator<Mat> YtX_agg(zero_Dd, [](Mat & a, const Mat & b) { a += b; }, [&](Mat & a) { a = zero_Dd; });
-    std::map<int, Mat> Xrows;
+    std::map<int, Eigen::RowVectorXd > Xrows;
     husky::lib::Aggregator<double> ss3Agg;
     husky::lib::Aggregator<double> reconErrAgg;
 
@@ -156,6 +153,7 @@ void sPCASVD() {
     int maxIter = stod(husky::Context::get_param("maxIter"));
     int iter = 0;
     double reconErr = 1000.0;
+    husky::base::log_msg("Start iterations ");
     for (iter=0;iter<maxIter;++iter){
         // 1.  M = C' * C + ss * I
         Eigen::MatrixXd M(d, d);
@@ -163,7 +161,7 @@ void sPCASVD() {
         M += ss * I_d;
 
         // 2. CM = C * M(-1)
-        Eigen::MatrixXd CM(D, d);
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> CM(D, d);
         CM = C * M.inverse();
 
         // 3. XM = Ym * CM   no mean centering for SVD
@@ -174,56 +172,74 @@ void sPCASVD() {
         //     X = Y * CM - Xm
         //     XtX = X' * X
         //     YtX = Y' * X - Ym' * X
+        Mat XtX = Eigen::MatrixXd::Zero(d, d);
+        Mat YtX = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>::Zero(D, d);
         list_execute(row_list, {}, {&ac}, [&](SparseRowObject & r) {
-            Mat Xrow(1, d);
+            Eigen::RowVectorXd Xrow(d);
             Xrow = r.row * CM;
             Xrows[r.id()] = Xrow;
-            XtX_agg.update( Xrow.transpose() * Xrow );
-            YtX_agg.update( r.row.transpose() * Xrow );
+            XtX += Xrow.transpose() * Xrow;
+            YtX += r.row.transpose() * Xrow.sparseView();
         });
-        Mat XtX = XtX_agg.get_value();
-        Mat YtX = YtX_agg.get_value();
+
+        XtX_agg.update( XtX );
+        YtX_agg.update( YtX );
+        husky::lib::AggregatorFactory::sync();
+        XtX = XtX_agg.get_value();
+        YtX = YtX_agg.get_value();
 
         // 5.  XtX += ss * M(-1)
         XtX += ss * M.inverse();
 
         // 6.  C = YtX / Xtx
         C = YtX * XtX.inverse();
-        Mat Ct = C.transpose();
+        Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> Ct = C.transpose();
 
         // 7.  ss2 = tr(XtX * C' * C)
-        double ss2 = (XtX * Ct * C).trace();
+        double ss2 = (XtX * (Ct * C)).trace();
 
         // 8. ss3 = sigma(n = 1 to N) Xn * C' * (Ycn)'
         list_execute(row_list, {}, {&ac}, [&](SparseRowObject & r) {
-            Mat reconY(1, D);
-            Mat reconYerr(1, D);
-            reconY = Xrows[r.id()] * Ct;
-            reconYerr = reconY - Mat(r.row);
-            ss3Agg.update( (reconY * r.row.transpose()).sum() );
+            //Eigen::RowVectorXd reconY = Eigen::RowVectorXd::Zero(D);
+            //Eigen::RowVectorXd reconYerr = Eigen::RowVectorXd::Zero(D);
+            //reconY = Xrows[r.id()] * Ct; //2min
+            
+            Eigen::RowVectorXd& tmp = Xrows[r.id()];
+
+            //for (int i=0;i<d;i++){ reconY += tmp(i)*Ct.row(i); }
+            //reconYerr = reconY - r.row; //1min
+            //ss3Agg.update( (r.row * reconY.transpose()).sum() );
+            
+            ss3Agg.update( (r.row * C) * tmp.transpose() );
+
+
+
             // reconstructin error = (Yi - Ym) * CM * C' - (Yi - Ym)
-            if (reconYerr.cwiseAbs().sum()>100){
-              for (int i=0;i<D;i++){
-                husky::base::log_msg("diff " + std::to_string(reconY(1,i)) + " " + std::to_string(r.row.coeffRef(1,i)));
-              }
-            }
-            reconErrAgg.update( reconYerr.cwiseAbs().sum() );
+            //if (reconYerr.cwiseAbs().sum()>(feaSumAgg.get_value()/N) && iter>5){
+            //  for (int i=0;i<D;i++){
+            //    husky::base::log_msg("diff " + std::to_string(reconY(0,i)) + " " + std::to_string(r.row.coeffRef(0,i)));
+            //  }
+            //}
+            //reconErrAgg.update( reconYerr.cwiseAbs().sum() );
         });
         double ss3 = ss3Agg.get_value();
 
         // 9. ss = (ss1 + ss2 - 2 * ss3) / N / D
         ss = (ss1 + ss2 - 2 * ss3) / N / D;
-        reconErr = reconErrAgg.get_value() / feaSumAgg.get_value();
-        if (husky::Context::get_global_tid() == 0) {
-            husky::base::log_msg("This is the " + std::to_string(iter) + " th iteration");
-            husky::base::log_msg("Reconstruction error is " + std::to_string(reconErr));
-        }
 
         // ---------------------
         // Add myself, orthonormalize C
         Eigen::JacobiSVD<Eigen::MatrixXd> svd(C, Eigen::ComputeThinU | Eigen::ComputeThinV);
         C = svd.matrixU();
         // ---------------------
+
+        reconErr = reconErrAgg.get_value() / feaSumAgg.get_value();
+        if (husky::Context::get_global_tid() == 0) {
+            //double diff = (C - OldC).cwiseAbs().sum();
+            //husky::base::log_msg("|V -Vold| is " + std::to_string(diff));
+            //OldC = C;
+            husky::base::log_msg("This is the " + std::to_string(iter) + " th iteration");
+        }
 
         XtX_agg.to_reset_each_iter();
         YtX_agg.to_reset_each_iter();
@@ -260,27 +276,27 @@ void sPCASVD() {
       oss << r.first << " ";
       for (int i=0;i<d; ++i){ oss << r.second.coeffRef(i) << " "; }
       oss << "\n";
-      husky::io::HDFS::Write("master", "9000", oss.str(), husky::Context::get_param("outDir") + "/svd_u",
-                             husky::Context::get_global_tid());
+      //husky::io::HDFS::Write("master", "9000", oss.str(), husky::Context::get_param("outDir") + "/svd_u",
+      //                       husky::Context::get_global_tid());
     }
     
     // output S and V
     if (husky::Context::get_global_tid() == 0) {
       husky::base::log_msg("After " + std::to_string(iter) + " iterations");
       husky::base::log_msg("ss is " + std::to_string(ss));
-      husky::base::log_msg("recon error is " + std::to_string(reconErr));
+      //husky::base::log_msg("recon error is " + std::to_string(reconErr));
 
-      husky::base::log_msg("idx singular values v: ");
+      husky::base::log_msg("idx sValue v: ");
       
       std::ostringstream oss;
       for (int i=0;i<d;i++){ 
         oss << i << " " << sVals[i] << " ";
-        for (int j=0;j<D;j++){ oss << C(j,i) << " ";}
+        //for (int j=0;j<D;j++){ oss << C(j,i) << " ";}
         oss << "\n" ;
       }
       husky::base::log_msg(oss.str());
-      husky::io::HDFS::Write("master", "9000", oss.str(), husky::Context::get_param("outDir") + "/svd_sv",
-                             husky::Context::get_global_tid());
+      //husky::io::HDFS::Write("master", "9000", oss.str(), husky::Context::get_param("outDir") + "/svd_sv",
+      //                       husky::Context::get_global_tid());
     }
 
 }
