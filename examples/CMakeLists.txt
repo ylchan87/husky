@@ -126,3 +126,9 @@ add_executable(TABLELOADER testTableLoader.cpp)
 target_link_libraries(TABLELOADER ${husky})
 target_link_libraries(TABLELOADER ${HUSKY_EXTERNAL_LIB})
 husky_default_properties(TABLELOADER )
+
+# kmeans
+add_executable(KMEANS kmeans.cpp)
+target_link_libraries(KMEANS ${husky})
+target_link_libraries(KMEANS ${HUSKY_EXTERNAL_LIB})
+husky_default_properties(KMEANS)
