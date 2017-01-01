@@ -100,7 +100,6 @@ void testKmeans() {
     auto& ac = husky::lib::AggregatorFactory::get_channel();
 
     // 1. Create and globalize point objects
-      husky::base::log_info( "1.Read" );
     auto& point_list = husky::ObjListStore::create_objlist<Point>();
     auto parse_row = [&](boost::string_ref& chunk) {
         if (chunk.size() == 0)
@@ -133,7 +132,9 @@ void testKmeans() {
         euclidean_dist,
         //init_center,
         3,
-        maxIter
+        maxIter,
+        //husky::KmeansOpts::kInitSimple
+        husky::KmeansOpts::kInitKmeansPP
     );
     kmeansOp.run();
 
