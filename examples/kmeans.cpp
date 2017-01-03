@@ -16,7 +16,8 @@
 #include <string>
 #include <vector>
 
-#include "kmeans.hpp"
+#include "lib/ml/kmeans.hpp"
+#include "lib/vector.hpp"
 
 #include "boost/tokenizer.hpp"
 
@@ -25,50 +26,17 @@
 #include "io/input/line_inputformat.hpp"
 #include "lib/aggregator_factory.hpp"
 
-typedef std::vector<double> featureVec;
+// kmeans expect featureVec to support operator/ and operator+=, and method get_feature_num()
+typedef husky::lib::DenseVector<double> featureVec;
 
-// kmeans expect featureVec to support operator/ and operator+=
-featureVec operator/ (const featureVec& v1, const int d) {
-    assert(d != 0);
-    featureVec ret(v1.size());
-    for (int i = 0; i < v1.size(); ++ i)
-        ret[i] = v1[i]/d;
-    return ret;
-}
-
-featureVec& operator+=(featureVec& v1, const featureVec& v2) {
-    if (v1.size()==0) { v1=v2; return v1;}
-    if (v2.size()==0) return v1;
-    for (int i = 0; i < v1.size(); ++ i)
-        v1[i] += v2[i];
-    return v1;
-}
-
-featureVec operator+(const featureVec& v1, const featureVec& v2) {
-    if (v1.size()==0) return featureVec(v2);
-    if (v2.size()==0) return v1;
-    featureVec v3( v1.size());
-    for (int i = 0; i < v1.size(); ++ i)
-        v3[i] = v1[i] + v2[i];
-    return v3;
-}
-
-// Euclidean distance
-double euclidean_dist(const featureVec& v1, const featureVec& v2){
-    double ret = 0;
-    for (int i = 0; i < v1.size(); ++ i) {
-        ret += pow(v1[i]-v2[i], 2);
-    }
-    return sqrt(ret);
-};
-
+double euclidean_dist(const featureVec& v1, const featureVec& v2) { return v1.euclid_dist(v2); }
 
 class Point {
    public:
     using KeyT = int;
 
     Point() {}
-    explicit Point(const KeyT& k) : key(k){}
+    explicit Point(const KeyT& k) : key(k) {}
     Point(const KeyT& k, featureVec& fV) {
         this->key = k;
         this->features = std::move(fV);
@@ -87,13 +55,13 @@ class Point {
 
     KeyT key;
     featureVec features;
-
 };
 
 void testKmeans() {
     husky::io::LineInputFormat infmt;
     infmt.set_input(husky::Context::get_param("input"));
 
+    int dim = std::stoi(husky::Context::get_param("dim"));
     int maxIter = std::stoi(husky::Context::get_param("iter"));
 
     husky::lib::Aggregator<int> dataCountAgg;
@@ -108,12 +76,11 @@ void testKmeans() {
         boost::tokenizer<boost::char_separator<char>> tok(chunk, sep);
         boost::tokenizer<boost::char_separator<char>>::iterator it = tok.begin();
         int id = stoi(*it++);
-        featureVec fV;
-        while (it != tok.end()) {
+        featureVec fV(dim);
+        for (int idx = 0; idx < dim; ++idx) {
             float tmp = stod(*it++);
-            fV.push_back(tmp);
+            fV[idx] = tmp;
         }
-        fV.shrink_to_fit();
 
         dataCountAgg.update(1);
         point_list.add_object(Point(id, fV));
@@ -125,32 +92,41 @@ void testKmeans() {
     husky::base::log_info("point_list size " + std::to_string(totDataPoints));
 
     // 2. train
-    std::vector<featureVec> init_center = {{0,1}, {-1,-1}, {1,1}};
-    auto kmeansOp = husky::Kmeans<Point, featureVec>(
-        point_list, 
-        [](const Point& p){ return p.features;},
-        euclidean_dist,
-        //init_center,
-        3,
-        maxIter,
-        //husky::KmeansOpts::kInitSimple
-        husky::KmeansOpts::kInitKmeansPP
+    std::vector<featureVec> init_center(3, featureVec(dim, 0.));
+    init_center[0][0] = 0.;
+    init_center[0][1] = 1.;
+    init_center[1][0] = -1.;
+    init_center[1][1] = -1.;
+    init_center[2][0] = 1.;
+    init_center[2][1] = 1.;
+
+    auto kmeansOp = husky::lib::ml::Kmeans<Point, featureVec>(
+        point_list,                                // obj_list
+        [](const Point& p){ return p.features;},   // lambda to extraxt feature from obj
+        euclidean_dist,                            // lambda to calculate distance between 2 features
+        3,                                         // no. of centers to use, OR put init_center here
+        maxIter,                                   // max iteration
+        husky::lib::ml::KmeansOpts::kInitKmeansPP  // (optional arg) init method, kInitKmeansPP OR kInitSimple,
+                                                   // irrelevant if init_center provided
     );
+
     kmeansOp.run();
 
-
     // 3. output
-    if (husky::Context::get_global_tid()==0){
-      auto clusterCenter  = kmeansOp.clusterCenter;
-      std::ostringstream oss;
-      oss << std::scientific; oss.precision(17);
-      oss << "kmeans: " << std::endl;
-      for (int i=0;i<clusterCenter.size();++i){ 
-        oss << i << " ";
-        for (auto aVal: clusterCenter[i]){ oss << aVal << " "; }
-        oss << std::endl;
-      }
-      husky::base::log_info( oss.str() );
+    if (husky::Context::get_global_tid() == 0) {
+        auto clusterCenter = kmeansOp.clusterCenter;
+        std::ostringstream oss;
+        oss << std::scientific;
+        oss.precision(17);
+        oss << "kmeans: " << std::endl;
+        for (int i = 0; i < clusterCenter.size(); ++i) {
+            oss << i << " ";
+            for (auto aVal : clusterCenter[i]) {
+                oss << aVal << " ";
+            }
+            oss << std::endl;
+        }
+        husky::base::log_info(oss.str());
     }
 }
 
@@ -161,8 +137,9 @@ int main(int argc, char** argv) {
     std::vector<std::string> args;
     args.push_back("hdfs_namenode");
     args.push_back("hdfs_namenode_port");
-    args.push_back("input");        // path to input file eg. hdfs:///user/ylchan/AffMat_T2/merge
-    args.push_back("iter");         // max no. of iteration to do
+    args.push_back("input");  // path to input file eg. hdfs:///user/ylchan/AffMat_T2/merge
+    args.push_back("dim");    // feature dimension of Kmeans data
+    args.push_back("iter");   // max no. of iteration to do
     if (husky::init_with_args(argc, argv, args)) {
         husky::run_job(testKmeans);
         return 0;
