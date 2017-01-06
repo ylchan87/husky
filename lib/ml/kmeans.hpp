@@ -39,12 +39,13 @@ class Kmeans {
 
     // no init centers provided
     Kmeans(ObjList<ObjT>& obj_list, std::function<FeatureT(const ObjT&)> get_feature,
-           std::function<double(const FeatureT&, const FeatureT&)> get_distance, const int k, const int iter,
+           std::function<double(const FeatureT&, const FeatureT&)> get_distance, const int k, const int dim, const int iter,
            KmeansOpts kInitOption = KmeansOpts::kInitSimple)
         : obj_list(obj_list),
           get_feature(get_feature),
           get_distance(get_distance),
           k(k),
+          dim(dim),
           iter(iter),
           kInitOption(kInitOption),
           clusterCenter() {}
@@ -60,7 +61,7 @@ class Kmeans {
           k(0),
           iter(iter),
           kInitOption(kInitOption),
-          clusterCenter(clusterCenter) {}
+          clusterCenter(clusterCenter) { dim = clusterCenter[0].get_feature_num(); }
 
    private:
     KmeansOpts kInitOption;
@@ -73,22 +74,21 @@ class Kmeans {
     int dim;
 
     std::vector<FeatureT>& init() {
-        dim = get_feature(obj_list.get_data()[0]).get_feature_num();
-
         if (clusterCenter.size() == 0) {  // init_center not provided
             int worker_num = husky::Context::get_worker_info().get_num_workers();
 
+            // an agg that concate vectors
+            husky::lib::Aggregator<std::vector<FeatureT>> init_center_agg(
+                std::vector<FeatureT>(),
+                [](std::vector<FeatureT>& a, const std::vector<FeatureT>& b) {
+                    a.insert(a.end(), b.begin(), b.end());
+                },
+                [](std::vector<FeatureT>& v) { v = std::move(std::vector<FeatureT>()); });
+
             if (kInitOption == KmeansOpts::kInitSimple) {
-                // an agg that concate vectors
-                husky::lib::Aggregator<std::vector<FeatureT>> init_center_agg(
-                    std::vector<FeatureT>(),
-                    [](std::vector<FeatureT>& a, const std::vector<FeatureT>& b) {
-                        a.insert(a.end(), b.begin(), b.end());
-                    },
-                    [](std::vector<FeatureT>& v) { v = std::move(std::vector<FeatureT>()); });
 
                 // each worker choose a few centers and push them to agg
-                int nSelect = k / worker_num + 1;
+                int nSelect = std::min(k, (int)obj_list.get_data().size());
                 std::vector<FeatureT> local_init_center;
                 for (int i = 0; i < nSelect; i++) {
                     local_init_center.push_back(get_feature(obj_list.get_data()[i]));
@@ -119,14 +119,15 @@ class Kmeans {
                 auto dice = std::bind(distribution, generator);
 
                 // randomly pick the first center
-                int rand1 = int(dice() * worker_num);
-                double rand2 = dice();
-                if (tid == rand1) {
-                    nextCenter.update(get_feature(localObjs[int(rand2 * localObjs.size())]));
+                double rand1 = dice();
+                std::vector<FeatureT> local_init_center;
+                if (localObjs.size()>0) {
+                    local_init_center.push_back(get_feature(localObjs[int(rand1 * localObjs.size())]));
                 }
+                init_center_agg.update(local_init_center);
                 husky::lib::AggregatorFactory::sync();
-                clusterCenter.push_back(nextCenter.get_value());
-                nextCenter.to_reset_each_iter();
+                clusterCenter = init_center_agg.get_value();
+                clusterCenter.resize(1);
 
                 // pick remaining centers by prob weighted by squared distance to nearest chosen centers
                 for (int i = 1; i < k; i++) {
@@ -188,6 +189,7 @@ class Kmeans {
             assert(clusterCenter[0].get_feature_num() == dim);
             k = clusterCenter.size();
         }
+        
         return clusterCenter;
     }
 };
@@ -267,7 +269,7 @@ auto kmeansOp = husky::lib::ml::Kmeans<Point, featureVec>(
     point_list,                                // obj_list
     [](const Point& p){ return p.features;},   // lambda to extraxt feature from obj
     euclidean_dist,                            // lambda to calculate distance between 2 features
-    3,                                         // no. of centers to use, OR put init_center here
+    3, 2                                       // no. of centers to use and dimension of feature, OR put init_center here
     maxIter,                                   // max iteration
     husky::lib::ml::KmeansOpts::kInitKmeansPP  // (optional arg) init method, kInitKmeansPP OR kInitSimple, irrelevant if init_center provided
 );
