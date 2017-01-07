@@ -27,78 +27,83 @@ namespace ml {
 
 enum class KmeansOpts { kInitSimple, kInitKmeansPP };
 
-template <typename ObjT, typename FeatureT>
+template <typename FeatureT, typename LabelT, bool is_sparse>
 class Kmeans {
+   using ObjT = LabeledPointHObj<FeatureT, LabelT, is_sparse>;
+   using FeatureVec = husky::lib::Vector<FeatureT, is_sparse>;
    public:
     // interface
     Kmeans(int k =1, int iter =1);
     void fit(ObjList<ObjT>& obj_list);
     int getClass(const ObjT&);
 
-    Kmeans<ObjT, FeatureT>& setK(int k){ this->k = k; return *this;}
-    Kmeans<ObjT, FeatureT>& setIter(int iter){ this->iter = iter; return *this;}
-    Kmeans<ObjT, FeatureT>& setFeatureDim(int dim){ this->dim = dim; return *this;}
-    Kmeans<ObjT, FeatureT>& setInitOpt(KmeansOpts opt){ this->kInitOption = opt; return *this;}
+    Kmeans<FeatureT, LabelT, is_sparse>& setK(int k){ this->k = k; return *this;}
+    Kmeans<FeatureT, LabelT, is_sparse>& setIter(int iter){ this->iter = iter; return *this;}
+    Kmeans<FeatureT, LabelT, is_sparse>& setFeatureDim(int dim){ this->dim = dim; return *this;}
+    Kmeans<FeatureT, LabelT, is_sparse>& setInitOpt(KmeansOpts opt){ this->kInitOption = opt; return *this;}
 
-    Kmeans<ObjT, FeatureT>& setDistanceFunc(std::function<double(const FeatureT&, const FeatureT&)> get_distance){
-      this->get_distance = get_distance;
-      return *this;
-    }
-
-    Kmeans<ObjT, FeatureT>& setFeatureExtractor(std::function<FeatureT(const ObjT&)> get_feature){
-      this->get_feature = get_feature;
-      return *this;
-    }
-
-    Kmeans<ObjT, FeatureT>& setCenters(std::vector<FeatureT> clusterCenters){
+    Kmeans<FeatureT, LabelT, is_sparse>& setCenters(std::vector<FeatureVec> clusterCenters){
       this->clusterCenters = clusterCenters;
       return *this;
     }
 
-    const std::vector<FeatureT>& getCenters(){
+    const std::vector<FeatureVec>& getCenters(){
+      assert(trained);
       return this->clusterCenters;
     }
 
    private:
+    bool trained;
+
     int k;
     int iter;
-    int dim;
+    int dim;    
     KmeansOpts kInitOption;
 
-    std::function<FeatureT(const ObjT&)> get_feature;
-    std::function<double(const FeatureT&, const FeatureT&)> get_distance;
-
-    std::vector<FeatureT> clusterCenters;
+    std::vector<FeatureVec> clusterCenters;
 
     void init(ObjList<ObjT>& obj_list);
+    const FeatureVec& get_feature(const ObjT& o);
+    double get_distance(const FeatureVec& v1, const FeatureVec& v2);
+
 
 };
 
-template <typename ObjT, typename FeatureT>
-Kmeans<ObjT, FeatureT>::Kmeans(int k, int iter) {
+template <typename FeatureT, typename LabelT, bool is_sparse>
+Kmeans<FeatureT, LabelT, is_sparse>::Kmeans(int k, int iter) {
     this->k = k;
     this->iter = iter;
     this->kInitOption = KmeansOpts::kInitKmeansPP;
 }
 
-template <typename ObjT, typename FeatureT>
-void Kmeans<ObjT, FeatureT>::init(ObjList<ObjT>& obj_list) {
+template <typename FeatureT, typename LabelT, bool is_sparse>
+const husky::lib::Vector<FeatureT, is_sparse>& Kmeans<FeatureT, LabelT, is_sparse>::get_feature(const ObjT& o) {
+    return o.x;
+}
+
+template <typename FeatureT, typename LabelT, bool is_sparse>
+double Kmeans<FeatureT, LabelT, is_sparse>::get_distance(const FeatureVec& v1, const FeatureVec& v2){
+    return v1.euclid_dist(v2);
+}
+
+template <typename FeatureT, typename LabelT, bool is_sparse>
+void Kmeans<FeatureT, LabelT, is_sparse>::init(ObjList<ObjT>& obj_list) {
     if (clusterCenters.size() == 0) {  // init_center not provided
         int worker_num = husky::Context::get_worker_info().get_num_workers();
 
         // an agg that concate vectors
-        husky::lib::Aggregator<std::vector<FeatureT>> init_center_agg(
-            std::vector<FeatureT>(),
-            [](std::vector<FeatureT>& a, const std::vector<FeatureT>& b) {
+        husky::lib::Aggregator<std::vector<FeatureVec>> init_center_agg(
+            std::vector<FeatureVec>(),
+            [](std::vector<FeatureVec>& a, const std::vector<FeatureVec>& b) {
                 a.insert(a.end(), b.begin(), b.end());
             },
-            [](std::vector<FeatureT>& v) { v = std::move(std::vector<FeatureT>()); });
+            [](std::vector<FeatureVec>& v) { v = std::move(std::vector<FeatureVec>()); });
 
         if (kInitOption == KmeansOpts::kInitSimple) {
 
             // each worker choose a few centers and push them to agg
             int nSelect = std::min(k, (int)obj_list.get_data().size());
-            std::vector<FeatureT> local_init_center;
+            std::vector<FeatureVec> local_init_center;
             for (int i = 0; i < nSelect; i++) {
                 local_init_center.push_back(get_feature(obj_list.get_data()[i]));
             }
@@ -109,9 +114,9 @@ void Kmeans<ObjT, FeatureT>::init(ObjList<ObjT>& obj_list) {
             clusterCenters.resize(k);
 
         } else if (kInitOption == KmeansOpts::kInitKmeansPP) {
-            husky::lib::Aggregator<FeatureT> nextCenter(FeatureT(dim, 0.),
-                                                        [&](FeatureT& a, const FeatureT& b) { a += b; },
-                                                        [&](FeatureT& v) { v = std::move(FeatureT(dim, 0.)); });
+            husky::lib::Aggregator<FeatureVec> nextCenter(FeatureVec(dim, 0.),
+                                                          [&](FeatureVec& a, const FeatureVec& b) { a += b; },
+                                                          [&](FeatureVec& v) { v = std::move(FeatureVec(dim, 0.)); });
 
             std::vector<husky::lib::Aggregator<double>> totwVec;
             for (int i = 0; i < worker_num; i++) {
@@ -129,7 +134,7 @@ void Kmeans<ObjT, FeatureT>::init(ObjList<ObjT>& obj_list) {
 
             // randomly pick the first center
             double rand1 = dice();
-            std::vector<FeatureT> local_init_center;
+            std::vector<FeatureVec> local_init_center;
             if (localObjs.size()>0) {
                 local_init_center.push_back(get_feature(localObjs[int(rand1 * localObjs.size())]));
             }
@@ -200,34 +205,31 @@ void Kmeans<ObjT, FeatureT>::init(ObjList<ObjT>& obj_list) {
     }
 }
 
-template <typename ObjT, typename FeatureT>
-void Kmeans<ObjT, FeatureT>::fit( ObjList<ObjT>& obj_list) {
+template <typename FeatureT, typename LabelT, bool is_sparse>
+void Kmeans<FeatureT, LabelT, is_sparse>::fit( ObjList<ObjT>& obj_list) {
+    trained = true;
+
     int tid = husky::Context::get_global_tid();
 
-    if (tid == 0) {
-        husky::base::log_info("Kmeans init");
-    }
+    if (tid == 0) { husky::base::log_info("Kmeans init");}
     init(obj_list);
 
-    if (tid == 0) {
-        husky::base::log_info("Kmeans run");
-    }
-
     auto& ac = husky::lib::AggregatorFactory::get_channel();
-    std::vector<husky::lib::Aggregator<FeatureT>> clusterCenterAggVec;
+    std::vector<husky::lib::Aggregator<FeatureVec>> clusterCenterAggVec;
     std::vector<husky::lib::Aggregator<int>> clusterCountAggVec;
     for (int i = 0; i < k; i++) {
         clusterCenterAggVec.push_back(
-            husky::lib::Aggregator<FeatureT>(FeatureT(dim, 0.), [&](FeatureT& a, const FeatureT& b) { a += b; },
-                                             [&](FeatureT& v) { v = std::move(FeatureT(dim, 0.)); }));
+            husky::lib::Aggregator<FeatureVec>(FeatureVec(dim, 0.), [&](FeatureVec& a, const FeatureVec& b) { a += b; },
+                                               [&](FeatureVec& v) { v = std::move(FeatureVec(dim, 0.)); }));
         clusterCountAggVec.push_back(husky::lib::Aggregator<int>());
     }
 
     for (int it = 0; it < iter; ++it) {
-        // assign obj to centers
         if (tid == 0) {
             husky::base::log_info("iter " + std::to_string(it) + "start ");
         }
+
+        // assign obj to centers
         list_execute(obj_list, {}, {&ac}, [&](ObjT& obj) {
             // get idx of nearest center
             int idx = getClass(obj);
@@ -249,8 +251,9 @@ void Kmeans<ObjT, FeatureT>::fit( ObjList<ObjT>& obj_list) {
     return;
 }
 
-template <typename ObjT, typename FeatureT>
-int Kmeans<ObjT, FeatureT>::getClass(const ObjT& obj) {
+template <typename FeatureT, typename LabelT, bool is_sparse>
+int Kmeans<FeatureT, LabelT, is_sparse>::getClass(const ObjT& obj) {
+    assert(trained);
     double dist = DBL_MAX;
     int idx = -1;
     for (int i = 0; i < k; ++i) {

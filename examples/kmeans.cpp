@@ -22,11 +22,7 @@
 
 #include "core/engine.hpp"
 
-// kmeans expect featureVec to support operator/ and operator+=, and method get_feature_num()
-typedef husky::lib::DenseVector<double> featureVec;
-using LabeledPointHObj = husky::lib::ml::LabeledPointHObj<double, double, false>;
-
-double euclidean_dist(const featureVec& v1, const featureVec& v2) { return v1.euclid_dist(v2); }
+using LabeledPointHObj = husky::lib::ml::LabeledPointHObj<double, int, false>;
 
 void testKmeans() {
 
@@ -35,51 +31,40 @@ void testKmeans() {
     // 1. read data
     auto& point_list = husky::ObjListStore::create_objlist<LabeledPointHObj>("point_list");
     int dim = husky::lib::ml::load_data(husky::Context::get_param("input"), point_list, husky::lib::ml::kLIBSVMFormat);
-
     husky::base::log_info("local point_list size " + std::to_string(point_list.get_data().size()));
 
     // 2. train
-    std::vector<featureVec> init_center(3, featureVec(2, 0.));
-    init_center[0][0] = 0.;
-    init_center[0][1] = 1.;
-    init_center[1][0] = -1.;
-    init_center[1][1] = -1.;
-    init_center[2][0] = 1.;
-    init_center[2][1] = 1.;
-
-    auto kmeansOp = husky::lib::ml::Kmeans<LabeledPointHObj, featureVec>(3,maxIter);
-    kmeansOp.setFeatureExtractor( [](const LabeledPointHObj& p){ return p.x;}); // lambda to extraxt feature from obj
-    kmeansOp.setDistanceFunc(euclidean_dist);                                   // lambda to calculate distance between 2 features
+    auto kmeansOp = husky::lib::ml::Kmeans<double, int, false>(3,maxIter); //template arg: feature is a double non-sparse vec, label is int (not used)
     kmeansOp.setInitOpt(husky::lib::ml::KmeansOpts::kInitKmeansPP).setFeatureDim(dim);
-
     kmeansOp.fit(point_list);
 
-    // 3. output
+    // 3. output k means centers
     if (husky::Context::get_global_tid() == 0) {
         auto clusterCenter = kmeansOp.getCenters();
         std::ostringstream oss;
-        oss << std::scientific;
-        oss.precision(17);
         oss << "kmeans: " << std::endl;
         for (int i = 0; i < clusterCenter.size(); ++i) {
             oss << i << " ";
-            for (auto aVal : clusterCenter[i]) {
-                oss << aVal << " ";
-            }
+            for (auto aVal : clusterCenter[i]) { oss << aVal << " ";}
             oss << std::endl;
         }
         husky::base::log_info(oss.str());
+    }
+
+    // 4. classify some points
+    if (point_list.get_data().size()>0){
+        husky::base::log_info("point class " + std::to_string(kmeansOp.getClass( point_list.get_data()[0])));
     }
 }
 
 int main(int argc, char** argv) {
     // Input:
-    // A txt with each line containing 1 row of the data as
-    // rowID rowElem1 rowElem2 rowElem3 ...rowElemN
+    // A txt with LIBSVM format
+    // label idx1:val1 idx2:val2 ...
     std::vector<std::string> args;
     args.push_back("hdfs_namenode");
     args.push_back("hdfs_namenode_port");
-    args.push_back("input");  // path to input file eg. hdfs:///user/ylchan/AffMat_T2/merge
+    args.push_back("input");  // path to input file eg. hdfs:///user/ylchan/testKmeansData_6000_K3_LIBSVMfmt.txt
     args.push_back("iter");   // max no. of iteration to do
     if (husky::init_with_args(argc, argv, args)) {
         husky::run_job(testKmeans);
