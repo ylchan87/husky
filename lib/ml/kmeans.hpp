@@ -211,7 +211,7 @@ void Kmeans<FeatureT, LabelT, is_sparse>::fit( ObjList<ObjT>& obj_list) {
 
     int tid = husky::Context::get_global_tid();
 
-    if (tid == 0) { husky::base::log_info("Kmeans init");}
+    if (tid == 0) { husky::LOG_I <<"Kmeans init" ;}
     init(obj_list);
 
     auto& ac = husky::lib::AggregatorFactory::get_channel();
@@ -226,7 +226,7 @@ void Kmeans<FeatureT, LabelT, is_sparse>::fit( ObjList<ObjT>& obj_list) {
 
     for (int it = 0; it < iter; ++it) {
         if (tid == 0) {
-            husky::base::log_info("iter " + std::to_string(it) + "start ");
+            husky::LOG_I << "iter " << it << " start";
         }
 
         // assign obj to centers
@@ -268,21 +268,7 @@ int Kmeans<FeatureT, LabelT, is_sparse>::getClass(const ObjT& obj) {
 
 /*
 Usage:
-
-std::vector<featureVec> init_center(3, featureVec(dim,0.) );
-init_center[0][0] = 0.;  init_center[0][1] = 1.;
-init_center[1][0] =-1.;  init_center[1][1] =-1.;
-init_center[2][0] = 1.;  init_center[2][1] = 1.;
-
-auto kmeansOp = husky::lib::ml::Kmeans<Point, featureVec>(
-    point_list,                                // obj_list
-    [](const Point& p){ return p.features;},   // lambda to extraxt feature from obj
-    euclidean_dist,                            // lambda to calculate distance between 2 features
-    3, 2                                       // no. of centers to use and dimension of feature, OR put init_center here
-    maxIter,                                   // max iteration
-    husky::lib::ml::KmeansOpts::kInitKmeansPP  // (optional arg) init method, kInitKmeansPP OR kInitSimple, irrelevant if init_center provided
-);
-kmeansOp.fit(point_list);
+see example/kmeans.cpp
 
 */
 }  // namespace ml

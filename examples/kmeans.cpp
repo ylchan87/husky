@@ -31,7 +31,7 @@ void testKmeans() {
     // 1. read data
     auto& point_list = husky::ObjListStore::create_objlist<LabeledPointHObj>("point_list");
     int dim = husky::lib::ml::load_data(husky::Context::get_param("input"), point_list, husky::lib::ml::kLIBSVMFormat);
-    husky::base::log_info("local point_list size " + std::to_string(point_list.get_data().size()));
+    husky::LOG_I << "local point_list size " << point_list.get_data().size();
 
     // 2. train
     auto kmeansOp = husky::lib::ml::Kmeans<double, int, false>(3,maxIter); //template arg: feature is a double non-sparse vec, label is int (not used)
@@ -48,12 +48,12 @@ void testKmeans() {
             for (auto aVal : clusterCenter[i]) { oss << aVal << " ";}
             oss << std::endl;
         }
-        husky::base::log_info(oss.str());
+        husky::LOG_I << oss.str();
     }
 
     // 4. classify some points
     if (point_list.get_data().size()>0){
-        husky::base::log_info("point class " + std::to_string(kmeansOp.getClass( point_list.get_data()[0])));
+        husky::LOG_I << "point class " << kmeansOp.getClass(point_list.get_data()[0]);
     }
 }
 
