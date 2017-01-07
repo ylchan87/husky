@@ -47,21 +47,16 @@ void testKmeans() {
     init_center[2][0] = 1.;
     init_center[2][1] = 1.;
 
-    auto kmeansOp = husky::lib::ml::Kmeans<LabeledPointHObj, featureVec>(
-        point_list,                                    // obj_list
-        [](const LabeledPointHObj& p){ return p.x;},   // lambda to extraxt feature from obj
-        euclidean_dist,                                // lambda to calculate distance between 2 features
-        3, 2,                                          // no. of centers to use and dimension of feature, OR put init_center here
-        maxIter,                                       // max iteration
-        husky::lib::ml::KmeansOpts::kInitKmeansPP      // (optional arg) init method, kInitKmeansPP OR kInitSimple,
-                                                       // irrelevant if init_center provided
-    );
+    auto kmeansOp = husky::lib::ml::Kmeans<LabeledPointHObj, featureVec>(3,maxIter);
+    kmeansOp.setFeatureExtractor( [](const LabeledPointHObj& p){ return p.x;}); // lambda to extraxt feature from obj
+    kmeansOp.setDistanceFunc(euclidean_dist);                                   // lambda to calculate distance between 2 features
+    kmeansOp.setInitOpt(husky::lib::ml::KmeansOpts::kInitKmeansPP).setFeatureDim(dim);
 
-    kmeansOp.run();
+    kmeansOp.fit(point_list);
 
     // 3. output
     if (husky::Context::get_global_tid() == 0) {
-        auto clusterCenter = kmeansOp.clusterCenter;
+        auto clusterCenter = kmeansOp.getCenters();
         std::ostringstream oss;
         oss << std::scientific;
         oss.precision(17);
