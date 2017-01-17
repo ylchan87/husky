@@ -24,6 +24,17 @@
 
 using LabeledPointHObj = husky::lib::ml::LabeledPointHObj<double, int, false>;
 
+void print_centers( std::vector<LabeledPointHObj::FeatureV>& clusterCenters){ 
+    std::ostringstream oss;
+    oss << "kmeans: " << std::endl;
+    for (int i = 0; i < clusterCenters.size(); ++i) {
+        oss << i << " ";
+        for (auto aVal : clusterCenters[i]) { oss << aVal << " ";}
+        oss << std::endl;
+    }
+    husky::LOG_I << oss.str();
+}
+
 void testKmeans() {
 
     int maxIter = std::stoi(husky::Context::get_param("iter"));
@@ -34,26 +45,35 @@ void testKmeans() {
     husky::LOG_I << "local point_list size " << point_list.get_data().size();
 
     // 2. train
-    auto kmeansOp = husky::lib::ml::Kmeans<double, int, false>(3,maxIter); //template arg: feature is a double non-sparse vec, label is int (not used)
-    kmeansOp.setInitOpt(husky::lib::ml::KmeansOpts::kInitKmeansPP).setFeatureDim(dim);
-    kmeansOp.fit(point_list);
+    auto kmeansInst = husky::lib::ml::Kmeans<LabeledPointHObj::FeatureV>(3,maxIter);
+    kmeansInst.set_init_opt(husky::lib::ml::KmeansOpts::kInitKmeansPP).set_feature_dim(dim);
+    kmeansInst.fit(point_list);
 
     // 3. output k means centers
     if (husky::Context::get_global_tid() == 0) {
-        auto clusterCenter = kmeansOp.getCenters();
-        std::ostringstream oss;
-        oss << "kmeans: " << std::endl;
-        for (int i = 0; i < clusterCenter.size(); ++i) {
-            oss << i << " ";
-            for (auto aVal : clusterCenter[i]) { oss << aVal << " ";}
-            oss << std::endl;
-        }
-        husky::LOG_I << oss.str();
+        std::vector<LabeledPointHObj::FeatureV> clusterCenters = kmeansInst.get_centers();
+        print_centers(clusterCenters);
     }
 
     // 4. classify some points
     if (point_list.get_data().size()>0){
-        husky::LOG_I << "point class " << kmeansOp.getClass(point_list.get_data()[0]);
+        husky::LOG_I << "point class " << kmeansInst.getClass(point_list.get_data()[0]);
+    }
+
+    //Fancy usage, do Kmeans on the 1st element in feature vector
+    // A. Create a Kmeans instance as in basic usage
+    auto kmeansInst2 = husky::lib::ml::Kmeans<LabeledPointHObj::FeatureV>(2,maxIter);
+    kmeansInst2.set_init_opt(husky::lib::ml::KmeansOpts::kInitKmeansPP).set_feature_dim(1);
+
+    // B. provide a custom def of distance that only counts the 1st element
+    kmeansInst2.set_distance_func( [](LabeledPointHObj::FeatureV v1, LabeledPointHObj::FeatureV v2){ return abs(v1[0]-v2[0]);} );
+
+    // C. provide a custom feature extractor that get the 1st feature element from the husky object
+    kmeansInst2.fit<LabeledPointHObj>(point_list, [](const LabeledPointHObj& o){return LabeledPointHObj::FeatureV(1,o.x[0]);} );
+
+    if (husky::Context::get_global_tid() == 0) {
+        std::vector<LabeledPointHObj::FeatureV> clusterCenters = kmeansInst2.get_centers();
+        print_centers(clusterCenters);
     }
 }
 

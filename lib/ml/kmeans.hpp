@@ -18,6 +18,7 @@
 #include <core/engine.hpp>
 #include <memory>
 #include <vector>
+#include "base/exception.hpp"
 #include "lib/aggregator_factory.hpp"
 #include "lib/ml/feature_label.hpp"
 
@@ -26,29 +27,68 @@ namespace lib {
 namespace ml {
 
 enum class KmeansOpts { kInitSimple, kInitKmeansPP };
+namespace KmeansUtil{
+    //primary template
+    template<typename FeatureVec, typename ObjT>
+    std::function<const FeatureVec(const ObjT&)> get_default_feature_extractor(FeatureVec*, ObjT*) {
+        return nullptr;
+    }
 
-template <typename FeatureT, typename LabelT, bool is_sparse>
+    template<typename FeatureVec>
+    std::function<double(const FeatureVec&, const FeatureVec&)> get_default_distance_func(FeatureVec*) {
+        return nullptr;
+    }
+
+    //specialize for lib::vector
+    template<typename FeatureT, typename LabelT, bool is_sparse>
+    using hObj = LabeledPointHObj<FeatureT, LabelT, is_sparse>;
+
+    template<typename FeatureT, bool is_sparse>
+    using hVec = husky::lib::Vector<FeatureT, is_sparse>;
+
+    template<typename FeatureT, typename LabelT, bool is_sparse>
+    std::function<const hVec<FeatureT, is_sparse>&(const hObj<FeatureT, LabelT, is_sparse>&)>
+    get_default_feature_extractor(hVec<FeatureT, is_sparse>*, hObj<FeatureT, LabelT, is_sparse>*) {
+        return [](const hObj<FeatureT, LabelT, is_sparse>& o)->auto& { return o.x; };
+    }
+
+    template<typename FeatureT, bool is_sparse>
+    std::function<double(const hVec<FeatureT, is_sparse>&, const hVec<FeatureT, is_sparse>&)>
+    get_default_distance_func(hVec<FeatureT, is_sparse>*) {
+        return [](const hVec<FeatureT, is_sparse>& v1, const hVec<FeatureT, is_sparse>& v2){ return v1.euclid_dist(v2);};
+    }
+}
+
+template <typename FeatureVec>
 class Kmeans {
-   using ObjT = LabeledPointHObj<FeatureT, LabelT, is_sparse>;
-   using FeatureVec = husky::lib::Vector<FeatureT, is_sparse>;
    public:
-    // interface
     Kmeans(int k =1, int iter =1);
-    void fit(ObjList<ObjT>& obj_list);
+
+    template <typename ObjT>
+    void fit(ObjList<ObjT>& obj_list, std::function<const FeatureVec(const ObjT&) > get_feature = nullptr);
+
+    int getClass(const FeatureVec&);
+
+    template <typename ObjT>
     int getClass(const ObjT&);
 
-    Kmeans<FeatureT, LabelT, is_sparse>& setK(int k){ this->k = k; return *this;}
-    Kmeans<FeatureT, LabelT, is_sparse>& setIter(int iter){ this->iter = iter; return *this;}
-    Kmeans<FeatureT, LabelT, is_sparse>& setFeatureDim(int dim){ this->dim = dim; return *this;}
-    Kmeans<FeatureT, LabelT, is_sparse>& setInitOpt(KmeansOpts opt){ this->kInitOption = opt; return *this;}
+    Kmeans<FeatureVec>& set_k(int k){ this->k = k; return *this;}
+    Kmeans<FeatureVec>& set_iter(int iter){ this->iter = iter; return *this;}
+    Kmeans<FeatureVec>& set_feature_dim(int dim){ this->dim = dim; return *this;}
+    Kmeans<FeatureVec>& set_init_opt(KmeansOpts opt){ this->kInitOption = opt; return *this;}
 
-    Kmeans<FeatureT, LabelT, is_sparse>& setCenters(std::vector<FeatureVec> clusterCenters){
+    Kmeans<FeatureVec>& set_distance_func(std::function<double(const FeatureVec& v1, const FeatureVec& v2)> f){
+        this->get_distance = f;
+        return *this;
+    }
+
+    Kmeans<FeatureVec>& set_centers(std::vector<FeatureVec> clusterCenters){
       this->clusterCenters = clusterCenters;
       return *this;
     }
 
-    const std::vector<FeatureVec>& getCenters(){
-      assert(trained);
+    const std::vector<FeatureVec>& get_centers(){
+      if (!trained) throw base::HuskyException("Kmeans not yet trained");
       return this->clusterCenters;
     }
 
@@ -62,32 +102,23 @@ class Kmeans {
 
     std::vector<FeatureVec> clusterCenters;
 
-    void init(ObjList<ObjT>& obj_list);
-    const FeatureVec& get_feature(const ObjT& o);
-    double get_distance(const FeatureVec& v1, const FeatureVec& v2);
+    template <typename ObjT>
+    void init(ObjList<ObjT>& obj_list, std::function<const FeatureVec(const ObjT&) > get_feature);
 
+    std::function<double(const FeatureVec& v1, const FeatureVec& v2)> get_distance;
 
 };
 
-template <typename FeatureT, typename LabelT, bool is_sparse>
-Kmeans<FeatureT, LabelT, is_sparse>::Kmeans(int k, int iter) {
+template <typename FeatureVec>
+Kmeans<FeatureVec>::Kmeans(int k, int iter) {
     this->k = k;
     this->iter = iter;
     this->kInitOption = KmeansOpts::kInitKmeansPP;
 }
 
-template <typename FeatureT, typename LabelT, bool is_sparse>
-const husky::lib::Vector<FeatureT, is_sparse>& Kmeans<FeatureT, LabelT, is_sparse>::get_feature(const ObjT& o) {
-    return o.x;
-}
-
-template <typename FeatureT, typename LabelT, bool is_sparse>
-double Kmeans<FeatureT, LabelT, is_sparse>::get_distance(const FeatureVec& v1, const FeatureVec& v2){
-    return v1.euclid_dist(v2);
-}
-
-template <typename FeatureT, typename LabelT, bool is_sparse>
-void Kmeans<FeatureT, LabelT, is_sparse>::init(ObjList<ObjT>& obj_list) {
+template <typename FeatureVec>
+template <typename ObjT>
+void Kmeans<FeatureVec>::init(ObjList<ObjT>& obj_list, std::function<const FeatureVec(const ObjT&) > get_feature) {
     if (clusterCenters.size() == 0) {  // init_center not provided
         int worker_num = husky::Context::get_worker_info().get_num_workers();
 
@@ -105,6 +136,7 @@ void Kmeans<FeatureT, LabelT, is_sparse>::init(ObjList<ObjT>& obj_list) {
             int nSelect = std::min(k, (int)obj_list.get_data().size());
             std::vector<FeatureVec> local_init_center;
             for (int i = 0; i < nSelect; i++) {
+                husky::LOG_I << "i" << i << std::endl;
                 local_init_center.push_back(get_feature(obj_list.get_data()[i]));
             }
             init_center_agg.update(local_init_center);
@@ -200,19 +232,29 @@ void Kmeans<FeatureT, LabelT, is_sparse>::init(ObjList<ObjT>& obj_list) {
             }  // end for loop over i= 1 to k
         }      // end if ( kInitOption == kInitKmeansPP)
     } else {   // init_center provided
-        assert(clusterCenters[0].get_feature_num() == dim);
+        if(clusterCenters[0].get_feature_num() != dim){
+            throw husky::base::HuskyException("User provided centers feature dim differs from Kmeans expectation");
+        }
         k = clusterCenters.size();
     }
 }
 
-template <typename FeatureT, typename LabelT, bool is_sparse>
-void Kmeans<FeatureT, LabelT, is_sparse>::fit( ObjList<ObjT>& obj_list) {
+template <typename FeatureVec>
+template <typename ObjT>
+void Kmeans<FeatureVec>::fit( ObjList<ObjT>& obj_list, std::function<const FeatureVec(const ObjT&) > get_feature) {
+
+    if (!get_feature) get_feature = KmeansUtil::get_default_feature_extractor( (FeatureVec*)0, (ObjT*)0 );
+    if (!get_distance) get_distance = KmeansUtil::get_default_distance_func( (FeatureVec*)0 );
+
+    if (!get_feature ){ husky::LOG_I << "feature extractor lamba not given. Abort" << std::endl; return; }
+    if (!get_distance){ husky::LOG_I << "distance function lamba not given. Abort" << std::endl; return; }
+
     trained = true;
 
     int tid = husky::Context::get_global_tid();
 
     if (tid == 0) { husky::LOG_I <<"Kmeans init" ;}
-    init(obj_list);
+    init(obj_list, get_feature);
 
     auto& ac = husky::lib::AggregatorFactory::get_channel();
     std::vector<husky::lib::Aggregator<FeatureVec>> clusterCenterAggVec;
@@ -232,7 +274,7 @@ void Kmeans<FeatureT, LabelT, is_sparse>::fit( ObjList<ObjT>& obj_list) {
         // assign obj to centers
         list_execute(obj_list, {}, {&ac}, [&](ObjT& obj) {
             // get idx of nearest center
-            int idx = getClass(obj);
+            int idx = getClass(get_feature(obj));
             // assgin
             clusterCenterAggVec[idx].update(get_feature(obj));
             clusterCountAggVec[idx].update(1);
@@ -251,19 +293,28 @@ void Kmeans<FeatureT, LabelT, is_sparse>::fit( ObjList<ObjT>& obj_list) {
     return;
 }
 
-template <typename FeatureT, typename LabelT, bool is_sparse>
-int Kmeans<FeatureT, LabelT, is_sparse>::getClass(const ObjT& obj) {
-    assert(trained);
+template <typename FeatureVec>
+int Kmeans<FeatureVec>::getClass(const FeatureVec& v) {
+    if (!trained) throw base::HuskyException("Kmeans not yet trained");
     double dist = DBL_MAX;
     int idx = -1;
     for (int i = 0; i < k; ++i) {
-        double d = get_distance(get_feature(obj), clusterCenters[i]);
+        double d = get_distance(v, clusterCenters[i]);
         if (d < dist) {
             dist = d;
             idx = i;
         }
     }
     return idx;
+}
+
+template <typename FeatureVec>
+template <typename ObjT>
+int Kmeans<FeatureVec>::getClass(const ObjT& o) {
+    if (!trained) throw base::HuskyException("Kmeans not yet trained");
+    auto get_feature = KmeansUtil::get_default_feature_extractor( (FeatureVec*)0, (ObjT*)0 );
+    if (!get_feature ) throw base::HuskyException("no default feature extractor for given object");
+    return this->getClass( get_feature(o) );
 }
 
 /*
