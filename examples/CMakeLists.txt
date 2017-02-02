@@ -120,3 +120,9 @@ add_executable(AMAT affinity.cpp)
 target_link_libraries(AMAT ${husky})
 target_link_libraries(AMAT ${HUSKY_EXTERNAL_LIB})
 husky_default_properties(AMAT)
+
+# Table loader
+add_executable(TABLELOADER testTableLoader.cpp)
+target_link_libraries(TABLELOADER ${husky})
+target_link_libraries(TABLELOADER ${HUSKY_EXTERNAL_LIB})
+husky_default_properties(TABLELOADER )
