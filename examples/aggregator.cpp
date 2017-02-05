@@ -22,6 +22,7 @@
 #include "core/engine.hpp"
 #include "io/input/inputformat_store.hpp"
 #include "lib/aggregator_factory.hpp"
+#include "lib/vector.hpp"
 
 namespace husky {
 
@@ -91,6 +92,17 @@ void aggregator() {
             LOG_I << "Word with maximum occurence: (\"" << max_occurence.get_value().first << "\", "
                   << max_occurence.get_value().second << ")";
         }
+    }
+
+    {
+        //using myT = double; //compiling
+        using myT = husky::lib::VectorXd; //not compiling
+        husky::lib::Aggregator<std::vector<myT>> vecConcateAgg(
+            std::vector<myT>(),
+            [](std::vector<myT>& a, const std::vector<myT>& b) {
+                a.insert(a.end(), b.begin(), b.end());
+            },
+            [](std::vector<myT>& v) { v = std::move(std::vector<myT>()); });
     }
 }
 
