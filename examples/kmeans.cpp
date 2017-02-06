@@ -16,65 +16,53 @@
 #include <string>
 #include <vector>
 
-#include "lib/ml/data_loader.hpp"
+#include "lib/ml/table_loader.hpp"
 #include "lib/ml/kmeans.hpp"
 #include "lib/vector.hpp"
 
 #include "core/engine.hpp"
-
-using LabeledPointHObj = husky::lib::ml::LabeledPointHObj<double, int, false>;
-
-void print_centers( std::vector<LabeledPointHObj::FeatureV>& clusterCenters){ 
-    std::ostringstream oss;
-    oss << "kmeans: " << std::endl;
-    for (int i = 0; i < clusterCenters.size(); ++i) {
-        oss << i << " ";
-        for (auto aVal : clusterCenters[i]) { oss << aVal << " ";}
-        oss << std::endl;
-    }
-    husky::LOG_I << oss.str();
-}
 
 void testKmeans() {
 
     int maxIter = std::stoi(husky::Context::get_param("iter"));
 
     // 1. read data
-    auto& point_list = husky::ObjListStore::create_objlist<LabeledPointHObj>("point_list");
-    int dim = husky::lib::ml::load_data(husky::Context::get_param("input"), point_list, husky::lib::ml::kLIBSVMFormat);
-    husky::LOG_I << "local point_list size " << point_list.get_data().size();
+    auto loader = husky::lib::ml::tableloader::get_libsvm_instance();
+    loader.set_col_names({"idx", "feature"});
+    auto& table = loader.load(husky::Context::get_param("input"));
+    auto& featureCol = table.get_attrlist<husky::lib::SparseVectorXd>("feature");
 
     // 2. train
-    auto kmeansInst = husky::lib::ml::Kmeans<LabeledPointHObj::FeatureV>(3,maxIter);
-    kmeansInst.set_init_opt(husky::lib::ml::KmeansOpts::kInitKmeansPP).set_feature_dim(dim);
-    kmeansInst.fit(point_list);
+    auto kmeansInst = husky::lib::ml::kmeans::Kmeans<husky::lib::SparseVectorXd>(3,maxIter);
+    kmeansInst.set_init_opt(husky::lib::ml::kmeans::KmeansOpts::kInitSimple).set_feature_dim(3);
+    kmeansInst.fit( table, featureCol );
 
     // 3. output k means centers
     if (husky::Context::get_global_tid() == 0) {
-        std::vector<LabeledPointHObj::FeatureV> clusterCenters = kmeansInst.get_centers();
-        print_centers(clusterCenters);
+        std::vector<husky::lib::SparseVectorXd> clusterCenters = kmeansInst.get_centers();
+        for (auto aCenter : clusterCenters) { husky::LOG_I << aCenter << std::endl;}
     }
 
     // 4. classify some points
-    if (point_list.get_data().size()>0){
-        husky::LOG_I << "point class " << kmeansInst.getClass(point_list.get_data()[0]);
+    if (featureCol.get_data().size()>0){
+        husky::LOG_I << "point class " << kmeansInst.getClass(featureCol.get_data()[0]);
     }
 
-    //Fancy usage, do Kmeans on the 1st element in feature vector
-    // A. Create a Kmeans instance as in basic usage
-    auto kmeansInst2 = husky::lib::ml::Kmeans<LabeledPointHObj::FeatureV>(2,maxIter);
-    kmeansInst2.set_init_opt(husky::lib::ml::KmeansOpts::kInitKmeansPP).set_feature_dim(1);
+    ////Fancy usage, do Kmeans on the 1st element in feature vector
+    //// A. Create a Kmeans instance as in basic usage
+    //auto kmeansInst2 = husky::lib::ml::Kmeans<LabeledPointHObj::FeatureV>(2,maxIter);
+    //kmeansInst2.set_init_opt(husky::lib::ml::KmeansOpts::kInitKmeansPP).set_feature_dim(1);
 
-    // B. provide a custom def of distance that only counts the 1st element
-    kmeansInst2.set_distance_func( [](LabeledPointHObj::FeatureV v1, LabeledPointHObj::FeatureV v2){ return abs(v1[0]-v2[0]);} );
+    //// B. provide a custom def of distance that only counts the 1st element
+    //kmeansInst2.set_distance_func( [](LabeledPointHObj::FeatureV v1, LabeledPointHObj::FeatureV v2){ return abs(v1[0]-v2[0]);} );
 
-    // C. provide a custom feature extractor that get the 1st feature element from the husky object
-    kmeansInst2.fit<LabeledPointHObj>(point_list, [](const LabeledPointHObj& o){return LabeledPointHObj::FeatureV(1,o.x[0]);} );
+    //// C. provide a custom feature extractor that get the 1st feature element from the husky object
+    //kmeansInst2.fit<LabeledPointHObj>(point_list, [](const LabeledPointHObj& o){return LabeledPointHObj::FeatureV(1,o.x[0]);} );
 
-    if (husky::Context::get_global_tid() == 0) {
-        std::vector<LabeledPointHObj::FeatureV> clusterCenters = kmeansInst2.get_centers();
-        print_centers(clusterCenters);
-    }
+    //if (husky::Context::get_global_tid() == 0) {
+    //    std::vector<LabeledPointHObj::FeatureV> clusterCenters = kmeansInst2.get_centers();
+    //    print_centers(clusterCenters);
+    //}
 }
 
 int main(int argc, char** argv) {
