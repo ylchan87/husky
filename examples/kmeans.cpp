@@ -18,14 +18,13 @@
 #include <string>
 #include <vector>
 
-#include "lib/ml/table_loader.hpp"
 #include "lib/ml/kmeans.hpp"
+#include "lib/ml/table_loader.hpp"
 #include "lib/vector.hpp"
 
 #include "core/engine.hpp"
 
 void testKmeans() {
-
     int maxIter = std::stoi(husky::Context::get_param("iter"));
 
     // 1. read data
@@ -35,30 +34,31 @@ void testKmeans() {
     auto& featureCol = table.get_attrlist<husky::lib::SparseVectorXd>("feature");
 
     // 2. train
-    auto kmeansInst = husky::lib::ml::kmeans::Kmeans<husky::lib::SparseVectorXd>(3,maxIter);
+    auto kmeansInst = husky::lib::ml::kmeans::Kmeans<husky::lib::SparseVectorXd>(3, maxIter);
     kmeansInst.set_init_opt(husky::lib::ml::kmeans::KmeansOpts::kInitKmeansBarBar);
     kmeansInst.set_center_sample_n_iter(3).set_center_sample_per_iter(3);
-    kmeansInst.fit( table, featureCol ); //this will add a new AttrList "KmeansClass" to the table
+    kmeansInst.fit(table, featureCol);  // this will add a new AttrList "KmeansClass" to the table
 
     // 3. output k means centers
     if (husky::Context::get_global_tid() == 0) {
         husky::LOG_I << "Trained centers:";
         std::vector<husky::lib::SparseVectorXd> clusterCenters = kmeansInst.get_centers();
-        for (auto aCenter : clusterCenters) { husky::LOG_I << aCenter;}
+        for (auto aCenter : clusterCenters) {
+            husky::LOG_I << aCenter;
+        }
     }
 
     // 4. get class of training data
     auto& classCol = table.get_attrlist<int>("KmeansClass");
-    if (classCol.get_data().size()>0){
+    if (classCol.get_data().size() > 0) {
         husky::LOG_I << "class for a row in training data: " << classCol.get_data()[0];
     }
 
     // 5. classify some new points
-    if (featureCol.get_data().size()>0){ 
+    if (featureCol.get_data().size() > 0) {
         int dim = featureCol.get_data()[0].size();
-        husky::LOG_I << "class for new point: " << kmeansInst.getClass( husky::lib::SparseVectorXd(dim) );
+        husky::LOG_I << "class for new point: " << kmeansInst.getClass(husky::lib::SparseVectorXd(dim));
     }
-
 }
 
 int main(int argc, char** argv) {
