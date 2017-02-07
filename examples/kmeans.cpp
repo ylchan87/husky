@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//#define HUSKY_DEBUG_MODE 1
+
 #include <random>
 #include <string>
 #include <vector>
@@ -34,35 +36,29 @@ void testKmeans() {
 
     // 2. train
     auto kmeansInst = husky::lib::ml::kmeans::Kmeans<husky::lib::SparseVectorXd>(3,maxIter);
-    kmeansInst.set_init_opt(husky::lib::ml::kmeans::KmeansOpts::kInitSimple).set_feature_dim(3);
-    kmeansInst.fit( table, featureCol );
+    kmeansInst.set_init_opt(husky::lib::ml::kmeans::KmeansOpts::kInitKmeansBarBar);
+    kmeansInst.set_center_sample_n_iter(3).set_center_sample_per_iter(3);
+    kmeansInst.fit( table, featureCol ); //this will add a new AttrList "KmeansClass" to the table
 
     // 3. output k means centers
     if (husky::Context::get_global_tid() == 0) {
+        husky::LOG_I << "Trained centers:";
         std::vector<husky::lib::SparseVectorXd> clusterCenters = kmeansInst.get_centers();
-        for (auto aCenter : clusterCenters) { husky::LOG_I << aCenter << std::endl;}
+        for (auto aCenter : clusterCenters) { husky::LOG_I << aCenter;}
     }
 
-    // 4. classify some points
-    if (featureCol.get_data().size()>0){
-        husky::LOG_I << "point class " << kmeansInst.getClass(featureCol.get_data()[0]);
+    // 4. get class of training data
+    auto& classCol = table.get_attrlist<int>("KmeansClass");
+    if (classCol.get_data().size()>0){
+        husky::LOG_I << "class for a row in training data: " << classCol.get_data()[0];
     }
 
-    ////Fancy usage, do Kmeans on the 1st element in feature vector
-    //// A. Create a Kmeans instance as in basic usage
-    //auto kmeansInst2 = husky::lib::ml::Kmeans<LabeledPointHObj::FeatureV>(2,maxIter);
-    //kmeansInst2.set_init_opt(husky::lib::ml::KmeansOpts::kInitKmeansPP).set_feature_dim(1);
+    // 5. classify some new points
+    if (featureCol.get_data().size()>0){ 
+        int dim = featureCol.get_data()[0].size();
+        husky::LOG_I << "class for new point: " << kmeansInst.getClass( husky::lib::SparseVectorXd(dim) );
+    }
 
-    //// B. provide a custom def of distance that only counts the 1st element
-    //kmeansInst2.set_distance_func( [](LabeledPointHObj::FeatureV v1, LabeledPointHObj::FeatureV v2){ return abs(v1[0]-v2[0]);} );
-
-    //// C. provide a custom feature extractor that get the 1st feature element from the husky object
-    //kmeansInst2.fit<LabeledPointHObj>(point_list, [](const LabeledPointHObj& o){return LabeledPointHObj::FeatureV(1,o.x[0]);} );
-
-    //if (husky::Context::get_global_tid() == 0) {
-    //    std::vector<LabeledPointHObj::FeatureV> clusterCenters = kmeansInst2.get_centers();
-    //    print_centers(clusterCenters);
-    //}
 }
 
 int main(int argc, char** argv) {

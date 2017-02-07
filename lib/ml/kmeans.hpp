@@ -20,13 +20,14 @@
 #include <vector>
 #include "base/exception.hpp"
 #include "lib/aggregator_factory.hpp"
+#include "lib/ml/table_loader.hpp"
 
 namespace husky {
 namespace lib {
 namespace ml {
 namespace kmeans {
 
-enum class KmeansOpts { kInitSimple, kInitKmeansPP };
+enum class KmeansOpts { kInitSimple, kInitKmeansPlusPlus, kInitKmeansBarBar };
 namespace KmeansUtil{
     //primary template
     template<typename FeatureVec>
@@ -39,7 +40,7 @@ namespace KmeansUtil{
         return FeatureVec(0);
     }
 
-    //specialize for lib::Vector
+    //specialize for lib::VectorXd and lib::SparseVectorXd
     using Vec = husky::lib::VectorXd;
     using SpVec = husky::lib::SparseVectorXd;
 
@@ -77,8 +78,11 @@ class Kmeans {
 
     Kmeans<FeatureVec>& set_k(int k){ this->k = k; return *this;}
     Kmeans<FeatureVec>& set_iter(int iter){ this->iter = iter; return *this;}
-    Kmeans<FeatureVec>& set_feature_dim(int dim){ this->dim = dim; return *this;}
     Kmeans<FeatureVec>& set_init_opt(KmeansOpts opt){ this->kInitOption = opt; return *this;}
+
+    //options related to Kmeans||
+    Kmeans<FeatureVec>& set_center_sample_n_iter(int n){ this->centerSampleNIter = n; return *this;}
+    Kmeans<FeatureVec>& set_center_sample_per_iter(int n){ this->centerSamplePerIter = n; return *this;}
 
     Kmeans<FeatureVec>& set_distance_sq_func(std::function<double(const FeatureVec& v1, const FeatureVec& v2)> f){
         this->get_distance_sq = f;
@@ -101,6 +105,8 @@ class Kmeans {
     int k;
     int iter;
     int dim;    
+    int centerSampleNIter;
+    int centerSamplePerIter;
     KmeansOpts kInitOption;
 
     std::vector<FeatureVec> clusterCenters;
@@ -120,15 +126,20 @@ template <typename FeatureVec>
 Kmeans<FeatureVec>::Kmeans(int k, int iter) {
     this->k = k;
     this->iter = iter;
-    this->kInitOption = KmeansOpts::kInitKmeansPP;
+    this->kInitOption = KmeansOpts::kInitKmeansPlusPlus;
+    this->centerSampleNIter = (k/5)+1;
+    this->centerSamplePerIter = 5;
+
 }
 
 template <typename FeatureVec>
 template <typename ObjT>
 void Kmeans<FeatureVec>::init(ObjList<ObjT>& obj_list, AttrList<ObjT,FeatureVec>& feature_col){
-    if (clusterCenters.size() == 0) {  // init_center not provided
-        int worker_num = husky::Context::get_worker_info().get_num_workers();
 
+    int tid = husky::Context::get_global_tid();
+    if (tid == 0) { husky::LOG_I <<"Kmeans init" ;}
+
+    if (clusterCenters.size() == 0) {  // init_center not provided
         std::default_random_engine generator;
         generator.seed(1234);
         std::uniform_real_distribution<double> distribution(0.0, 1.0);
@@ -136,37 +147,66 @@ void Kmeans<FeatureVec>::init(ObjList<ObjT>& obj_list, AttrList<ObjT,FeatureVec>
 
         if (kInitOption == KmeansOpts::kInitSimple) {
             clusterCenters = get_random_rows_col_val( obj_list, feature_col, k, dice);
-        } else if (kInitOption == KmeansOpts::kInitKmeansPP) {
+
+        } else if (kInitOption == KmeansOpts::kInitKmeansBarBar || kInitOption == KmeansOpts::kInitKmeansPlusPlus) {
+            //Kmeans++ as a special case of Kmeans||
+            if (kInitOption == KmeansOpts::kInitKmeansPlusPlus) {
+                centerSampleNIter = k-1;
+                centerSamplePerIter = 1;
+            }
+
+            if (kInitOption == KmeansOpts::kInitKmeansBarBar) {
+                if (centerSampleNIter*centerSamplePerIter<k) throw husky::base::HuskyException("KmeansBarBar parameter error, sampled center count less then k");
+            }
+            
             auto& d2_col = obj_list.template create_attrlist<double>("__distanceSq");
 
+            // pick first center randomly then update weight by squared distance to the chosen center
             clusterCenters = get_random_rows_col_val( obj_list, feature_col, 1, dice);
-            husky::LOG_I << clusterCenters.size() << " got it";
-
-            husky::LOG_I << "first center pick";
+            husky::DLOG_I << "Got first center pick with size " << clusterCenters.size();
             list_execute(obj_list, [&](ObjT& obj) {
                 double d2 = get_distance_sq(feature_col.get(obj), clusterCenters.back());
                 d2_col.set(obj, d2);
             });
 
             // pick remaining centers by prob weighted by squared distance to nearest chosen centers
-            for (int i = 1; i < k; i++) {
-                husky::LOG_I << i << "  center pick";
-                auto newClusterCenters = get_random_rows_col_val( obj_list, feature_col, 1, dice, &d2_col);
+            for (int i = 0; i < centerSampleNIter; i++) {
+                husky::DLOG_I << i << " Kmeans|| / Kmeans++ center pick";
+                auto newClusterCenters = get_random_rows_col_val( obj_list, feature_col, centerSamplePerIter, dice, &d2_col);
 
-                husky::LOG_I << newClusterCenters.size() << " then update w";
+                husky::DLOG_I << "Got " << newClusterCenters.size() << "new centers then update w";
 
                 list_execute(obj_list, [&](ObjT& obj) {
-                    double oldd2 = d2_col.get(obj);
-                    double d2 = get_distance_sq(feature_col.get(obj), newClusterCenters.back());
-                    d2_col.set(obj, std::min(oldd2,d2));
+                    double d2 = d2_col.get(obj);
+                    FeatureVec& tmpFeature = feature_col.get(obj);
+                    for (aCenter : newClusterCenters){
+                        d2 = std::min( d2, get_distance_sq(tmpFeature, aCenter) );
+                    }
+                    d2_col.set(obj, d2);
                 });
 
                 clusterCenters.insert( clusterCenters.end(),
                                        std::make_move_iterator(newClusterCenters.begin()),
                                        std::make_move_iterator(newClusterCenters.end()));
+            }
 
-            }  // end for loop over i= 1 to k
-        }      // end if ( kInitOption == kInitKmeansPP)
+            // For Kmeans|| shortlist the oversampled centers back to k of them
+            if (clusterCenters.size()>k){
+                husky::DLOG_I << " Kmeans|| center shortlisting";
+                auto& center_list = ObjListStore::create_objlist<tableloader::Row>();
+                auto& feature_col = center_list.template create_attrlist<FeatureVec>("feature");
+                if (tid==0){
+                    for (auto aCenter : clusterCenters){
+                        auto idx = center_list.add_object( tableloader::Row() );
+                        feature_col.set( idx, aCenter);
+                    }
+                }
+                auto kmeansInst = Kmeans<FeatureVec>(k,iter);
+                kmeansInst.set_init_opt(KmeansOpts::kInitSimple);//.set_feature_dim(3);
+                kmeansInst.fit( center_list, feature_col );
+                clusterCenters = kmeansInst.get_centers();
+            }
+        }
     } else {   // init_center provided
         if(clusterCenters[0].size() != dim){
             throw husky::base::HuskyException("User provided centers feature dim differs from Kmeans expectation");
@@ -174,7 +214,7 @@ void Kmeans<FeatureVec>::init(ObjList<ObjT>& obj_list, AttrList<ObjT,FeatureVec>
         k = clusterCenters.size();
     }
     for (auto aCenter : clusterCenters){
-        husky::LOG_I << "center " << aCenter << std::endl;
+        husky::DLOG_I << "initial centers " << aCenter;
     }
 }
 
@@ -184,10 +224,10 @@ std::vector<ColT> Kmeans<FeatureVec>::get_random_rows_col_val(ObjList<ObjT>& obj
                                                               int count, std::function<double()>& dice, AttrList<ObjT,double>* weight_col){
     // all datapoints are laid on a line, each span length equal to its weight
     // a point is randomly chosen on the line, the datapoint that this point falls on is picked
-    husky::LOG_I << "random at start " << dice() << std::endl;
-
     int worker_num = husky::Context::get_worker_info().get_num_workers();
     int tid = husky::Context::get_global_tid();
+
+    husky::DLOG_I << "tid " << tid << ", RNG at start " << dice() << std::endl;
 
     auto& ac = husky::lib::AggregatorFactory::get_channel();
     std::vector<husky::lib::Aggregator<double>> totWs;
@@ -217,19 +257,19 @@ std::vector<ColT> Kmeans<FeatureVec>::get_random_rows_col_val(ObjList<ObjT>& obj
     for (int i=0;i<worker_num;++i) {
         totW += totWs[i].get_value();
         if (i<tid) preceedW += totWs[i].get_value();
-        husky::LOG_I << "Ws " << i << " " << totWs[i].get_value();
     }
 
-    husky::LOG_I << "totW " << totW;
-    husky::LOG_I << "preceedW " << preceedW;
+    husky::DLOG_I << "tid " << tid << ", get tot weight " << totW;
+    husky::DLOG_I << "tid " << tid << ", local total weight " << totWs[tid].get_value();
+    husky::DLOG_I << "tid " << tid << ", preceeding weight " << preceedW;
 
     std::list<double> targetWs;
     for (int i=0;i<count; ++i){
         double targetW = totW * dice();
-        husky::LOG_I << "targetW " << targetW;
+        husky::DLOG_I << "targetW " << targetW;
         if (targetW>preceedW && targetW<(preceedW+totWs[tid].get_value())){
             targetWs.push_back(targetW);
-            husky::LOG_I << "targetW added" << targetW;
+            husky::DLOG_I << "targetW " << targetW << " added in tid " << tid ;
         }
     }
     targetWs.sort();
@@ -246,7 +286,7 @@ std::vector<ColT> Kmeans<FeatureVec>::get_random_rows_col_val(ObjList<ObjT>& obj
             if (targetIdx<0) targetIdx=0;
             if (targetIdx>=obj_list.get_size()) targetIdx=obj_list.get_size()-1;
             selected_rows_col_val.update( {target_col[targetIdx]} );
-            husky::LOG_I << "ran pick idx " << targetIdx;
+            husky::DLOG_I << "tid " << tid << ", random pick idx " << targetIdx;
         }
     }else{
         if (targetWs.size()==0) goto random_pick_done;
@@ -269,7 +309,7 @@ std::vector<ColT> Kmeans<FeatureVec>::get_random_rows_col_val(ObjList<ObjT>& obj
         random_pick_done:
         ;           
     }
-    husky::LOG_I << "random at end " << dice() << std::endl;
+    husky::DLOG_I << "tid " << tid << ", RNG at end " << dice() << std::endl;
 
     husky::lib::AggregatorFactory::sync();
     return selected_rows_col_val.get_value();
@@ -282,13 +322,20 @@ void Kmeans<FeatureVec>::fit(ObjList<ObjT>& obj_list, AttrList<ObjT,FeatureVec>&
     if (!get_distance_sq) get_distance_sq = KmeansUtil::get_default_distance_sq_func( (FeatureVec*)0 );
     if (!get_distance_sq){ husky::LOG_I << "distance function lamba not given. Abort" << std::endl; return; }
 
+    int tid = husky::Context::get_global_tid();
     trained = true;
 
-    int tid = husky::Context::get_global_tid();
+    husky::lib::Aggregator<int>dim_agg(0, [](int& a, const int& b) { a = std::max(a, b); });
+    if (feature_col.get_data().size()>0){
+        dim_agg.update(feature_col.get_data()[0].size());
+    }
+    husky::lib::AggregatorFactory::sync();
+    dim = dim_agg.get_value();
+    if (tid == 0) { husky::LOG_I << "detected feature dim as " << dim << std::endl;}
 
-    if (tid == 0) { husky::LOG_I <<"Kmeans init" ;}
     init(obj_list, feature_col);
 
+    //Prepare aggregators for calculating mean and count for each center
     auto& ac = husky::lib::AggregatorFactory::get_channel();
     std::vector<husky::lib::Aggregator<FeatureVec>> clusterCenterAggVec;
     std::vector<husky::lib::Aggregator<int>> clusterCountAggVec;
@@ -302,6 +349,7 @@ void Kmeans<FeatureVec>::fit(ObjList<ObjT>& obj_list, AttrList<ObjT,FeatureVec>&
 
     auto& class_col = obj_list.template create_attrlist<int>("KmeansClass");
 
+    //The main EM loop for Kmeans
     for (int it = 0; it < iter; ++it) {
         if (tid == 0) {
             husky::LOG_I << "iter " << it << " start";
